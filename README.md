@@ -1,1217 +1,440 @@
-# Lab 26: Command Mode and Insert Mode in `vi` / `vim`
+# Lab: Command Mode and Insert Mode — `vi` / `vim`
 
-**Series:** File Operations & Shell Fundamentals · **Lab 26 of the Novice → RHCA path**  
-**Certifications covered:** RHCSA EX200 (every editing task), RHCE EX294 (playbook authoring on the control node), CKA (manifest editing, `kubectl edit`), RHCA building blocks (RH342 fast recovery edits, RH358 service configs, RH236 brick config edits)  
-**Prerequisite:** Labs 05–25 (filesystem, `cat`, `less`, `grep`, `sed`, `awk`)  
-**Time Estimate:** 60–80 minutes  
-**Difficulty arc:** Tasks 1–6 foundation · 7–13 practical · 14–18 advanced · 19–20 exam-realistic
-
----
-
-## 🎯 Objective
-
-By the end of this lab you will edit files in `vi` (or `vim`) **without thinking about which key you're pressing**. You'll switch between Command, Insert, and Last-line modes fluidly, you'll move, search, replace, save, and quit at speed — and you'll never again `:q!` away a real change by accident. `vi` is the only editor guaranteed to be on every Linux system, every rescue shell, every container. Mastering it is non-negotiable.
+**Series:** linux-ops-mastery — RHCSA Text File Management
+**Subjects covered:** the three modes (Normal/Command, Insert, Command-line/Ex), movement (`h j k l`, `w b e`, `0 ^ $`, `gg G`, `Ngg`, `Ctrl-d`/`Ctrl-u`, `Ctrl-f`/`Ctrl-b`), edits (`i a I A o O`, `x X dd dw D yy yw p P r R s S c cc`), search and replace (`/`, `?`, `n N`, `:%s/old/new/gc`), ex commands (`:w`, `:q`, `:wq`, `:q!`, `:x`, `ZZ`, `:e!`, `:set number/nonumber`), visual mode (`v V Ctrl-v`), undo/redo (`u`, `Ctrl-r`), buffers and windows (`:split`, `:vsplit`, `Ctrl-w w/h/j/k/l`), `~/.vimrc` basics, the relationship between `vi`, `vim`, and `nvim`, why RHCSA tests vi specifically, and recovery from `swp` files
+**Career arcs covered:** RHCSA (mandatory editor on the exam — no nano), RHCE (Ansible playbook editing on remote hosts), SRE (quick remote config edits over SSH), DevOps (commit messages, Dockerfile edits in CI shells), AI/MLOps (editing training configs on GPU boxes that only have vim)
+**Prerequisite:** Lab 05 (filesystem nav), Lab 22 (regex flavors so `:%s///` makes sense)
+**Time Estimate:** 40 to 60 minutes
+**Difficulty arc:** Task 1 foundation (open → insert → save → quit) · 2 motions and basic edits · 3 search + replace · 4 visual mode + yank/put · 5 split windows + buffers · 6 RHCSA exam-realistic capstone
 
 ---
 
-## 🧠 Concept: `vi` Is a State Machine
+## Objective
 
-Most editors have one mode: type letter → letter appears. `vi` has **three** primary modes. Every keystroke is interpreted according to the mode you're in. This is what makes `vi` confusing for 30 minutes and incredible for 30 years.
+Open any text file, navigate without arrows, make precise edits, search and substitute globally, and save — all with the muscle memory the RHCSA exam demands. By the end of this lab `vi` stops being an obstacle and starts being faster than a GUI editor.
+
+The capstone is an exam-realistic prompt: *"In `vi`, open a copy of `/etc/ssh/sshd_config`, jump to the line containing `PermitRootLogin`, change its value to `no`, append a footer comment, save and quit. Then re-open and use a single ex substitute command to comment out every line containing `Banner`."*
+
+> **Lab safety note:** Capstone operates on a copy under `/root/vilab/`. Real `sshd_config` is never modified.
+
+---
+
+## Concept: `vi` Is Modal — The Keys Mean Different Things in Different Modes
 
 ```
-                    ╔═══════════════════════════╗
-                    ║      COMMAND MODE         ║  ← starting mode
-                    ║  (movement, deletion,     ║
-                    ║   yank, paste, search)    ║
-                    ╚═══════════════════════════╝
-              i / a / o / I / A / O      ⇡ Esc
-                          ▼               ⇡
-                    ╔═══════════════════════════╗
-                    ║       INSERT MODE         ║
-                    ║   (typing inserts text)   ║
-                    ╚═══════════════════════════╝
-
-                      :                  ⇡ Esc / Enter
-                      ▼                  ⇡
-                    ╔═══════════════════════════╗
-                    ║      LAST-LINE MODE       ║  (ex commands)
-                    ║   (:w, :q, :s/A/B/g, :!)  ║
-                    ╚═══════════════════════════╝
+                Normal/Command Mode  ◄── Esc ─── Insert Mode
+                        │
+                        │ : / ?  
+                        ▼
+                Command-line (Ex) Mode
 ```
 
-### Rule of thumb
+- **Normal mode** (default on open): every key is a command. `dd` deletes a line, `yy` yanks (copies), `5gg` jumps to line 5.
+- **Insert mode** (`i`, `a`, `o`, …): keys go into the file as text. Press **Esc** to return to Normal.
+- **Command-line / Ex mode** (`:`): type `:w`, `:q`, `:%s/old/new/g`, etc. Enter executes, Esc cancels.
 
-| Need to… | Mode |
-|---|---|
-| Move, delete, copy, paste | Command |
-| Type text | Insert |
-| Save, quit, search-replace globally | Last-line |
-| Anywhere, any time → escape to Command | **Press `Esc`** |
-
-> **Senior-engineer reflex:** When in doubt, press `Esc`. You're now in Command mode. From there, everything is possible.
-
-### `vi` vs. `vim` vs. `nvim`
-
-| Editor | What it is | When you'll meet it |
-|---|---|---|
-| `vi` | The original. POSIX-mandated. | Rescue shells, busybox, very old systems |
-| `vim` | "Vi IMproved" — modern superset (syntax, undo branches, plugins) | Default `vi` on RHEL, Rocky, Ubuntu |
-| `nvim` | Neovim — Lua-scriptable fork | Increasingly common, fully `vi`-compatible |
-
-On RHEL: `which vi` typically reports `/usr/bin/vi` symlinking to `/usr/libexec/vi`, and `vim` is `/usr/bin/vim`. The minimal `vi` is intentionally small for rescue. Everything in this lab works in both unless noted.
+> **Why this matters:** Every other GUI editor is permanently in Insert mode. `vi` separates *editing commands* from *typing text*, which is why expert users edit faster in `vi` than anywhere else. The RHCSA exam runs in a GUI VM where `nano` is **not installed** — `vi` is the only editor you can count on.
 
 ---
 
-## 📚 Key & Command Reference
+## 📜 Why `vi` Exists — The Story
 
-### Entering Insert mode (from Command)
+`vi` was written by **Bill Joy** in 1976 at UC Berkeley. It evolved from `ex` — itself an extension of `ed`, the original Unix line editor. The name `vi` is short for **vi**sual, because unlike `ed`/`ex` (which manipulated lines blind), `vi` *displayed the file* — radical for 1976 on 1200-baud terminals.
 
-| Key | What it does |
+Bill Joy designed the keybindings around the **ADM-3A terminal** which had:
+- `Esc` where today's Caps Lock sits (cheap to press)
+- Arrow keys drawn on `h j k l` (cheap to remember)
+- No separate Cursor keys (forced him to invent modal editing)
+
+`vim` ("vi improved") was written by **Bram Moolenaar** in 1991 as a free `vi` clone with multi-undo, syntax highlighting, plugins, scripting, and split windows. On RHEL `/usr/bin/vi` is usually a symlink to `vim` in compatibility mode.
+
+> **The point of the story:** The "weird" keybindings are not arbitrary — they were chosen for a specific terminal in 1976. Once you internalize `hjkl` and Esc-back-to-Normal, every other tool that copies vim (`tmux` copy mode, `less`, `man`, `git` log pager, every IDE's "vim mode") feels familiar.
+
+---
+
+## 👪 The vi Family — Who Lives There
+
+| Editor | Notes |
 |---|---|
-| `i` | Insert **before** the cursor |
-| `I` | Insert at the **start** of the current line |
-| `a` | Append **after** the cursor |
-| `A` | Append at the **end** of the line |
-| `o` | Open a new line **below** and enter insert |
-| `O` | Open a new line **above** and enter insert |
-| `s` | **S**ubstitute the char under cursor (delete + insert) |
-| `S` | Substitute the whole line |
-| `R` | Replace mode (overtype) |
-| `Esc` | Leave Insert mode → back to Command |
+| `vi` | Original visual editor (1976) |
+| `vim` | Vi Improved (1991); de facto on Linux |
+| `nvim` (Neovim) | Modern fork; better defaults, Lua plugins |
+| `nano` | Beginner-friendly, modeless. **Not on RHCSA** |
+| `gedit` / `kate` | GUI editors |
+| `emacs` | The other classic; modeless |
+| `joe` / `mcedit` | Modeless old-school alternatives |
+| `view FILE` | Read-only vim |
+| `vimdiff` / `vim -d` | Two-pane diff editor |
+| `vimtutor` | Built-in 30-minute interactive tutorial |
+| `:!shell-cmd` | Run a shell command from within vim |
+| `:r !shell-cmd` | Insert command output into the buffer |
 
-### Movement (Command mode)
+### vi/vim cheat sheet (the high-value subset)
 
-| Key | Motion |
+**Movement (Normal mode)**
+
+| Keys | Move to |
 |---|---|
-| `h` `j` `k` `l` | Left, Down, Up, Right |
+| `h j k l` | Left / Down / Up / Right |
+| `w` / `b` | Next / previous word start |
+| `e` | End of word |
 | `0` | Start of line |
 | `^` | First non-blank of line |
 | `$` | End of line |
-| `w` / `W` | Next word / WORD (space-separated) |
-| `b` / `B` | Previous word / WORD |
-| `e` / `E` | End of next word / WORD |
-| `gg` | First line of file |
-| `G` | Last line of file |
-| `NG` or `:N` | Go to line N |
-| `Ctrl-d` / `Ctrl-u` | Half-page down / up |
-| `Ctrl-f` / `Ctrl-b` | Full-page down / up |
-| `%` | Jump to matching bracket `( ) { } [ ]` |
-| `''` (two apostrophes) | Jump back to previous position |
+| `gg` | Top of file |
+| `G` | Bottom of file |
+| `Ngg` / `:N` | Line N |
+| `Ctrl-d` / `Ctrl-u` | Half-page down/up |
+| `Ctrl-f` / `Ctrl-b` | Full-page down/up |
+| `%` | Jump to matching `(`, `[`, `{` |
+| `*` / `#` | Search word under cursor forward/back |
 
-### Editing (Command mode)
+**Entering insert mode**
 
-| Key | Action |
+| Keys | What it does |
+|---|---|
+| `i` | Insert before cursor |
+| `a` | Append after cursor |
+| `I` | Insert at first non-blank of line |
+| `A` | Append at end of line |
+| `o` | Open new line below |
+| `O` | Open new line above |
+| `s` | Substitute one character |
+| `S` / `cc` | Substitute entire line |
+| `R` | Replace mode (overwrite) |
+| `Esc` | Back to Normal |
+
+**Edits (Normal mode)**
+
+| Keys | What |
 |---|---|
 | `x` | Delete char under cursor |
 | `X` | Delete char before cursor |
-| `dd` | Delete (cut) line |
-| `Ndd` | Delete N lines |
+| `dd` | Delete line (cut) |
+| `D` | Delete to end of line |
 | `dw` | Delete word |
-| `d$` or `D` | Delete to end of line |
-| `d0` | Delete to start of line |
-| `yy` | **Y**ank (copy) line |
-| `Nyy` | Yank N lines |
+| `d$` | Same as `D` |
+| `yy` / `Y` | Yank (copy) line |
 | `yw` | Yank word |
-| `p` | Paste **after** cursor (line below for line-yank) |
-| `P` | Paste **before** cursor |
+| `p` / `P` | Paste after / before |
+| `r<char>` | Replace single character |
 | `u` | Undo |
 | `Ctrl-r` | Redo |
-| `.` | Repeat the last edit |
-| `r<char>` | Replace one character |
-| `~` | Toggle case |
-| `J` | Join current line with the next |
+| `.` | Repeat last change |
+| `J` | Join next line into this one |
+| `>>` / `<<` | Indent / outdent line |
 
-### Searching (Command mode)
+**Search and replace**
 
-| Key | Action |
+| Keys | What |
 |---|---|
-| `/PATTERN` | Forward search |
-| `?PATTERN` | Backward search |
+| `/pattern` | Search forward (regex) |
+| `?pattern` | Search backward |
 | `n` / `N` | Next / previous match |
-| `*` / `#` | Search for word under cursor forward / backward |
-| `:noh` | Clear current search highlight |
+| `:%s/old/new/g` | Replace all in file |
+| `:%s/old/new/gc` | …with confirm per match |
+| `:7,20s/old/new/g` | …only lines 7–20 |
+| `:g/PAT/d` | Delete every line matching PAT |
+| `:v/PAT/d` | Delete every line NOT matching PAT |
 
-### Last-line (ex) commands
+**Ex command-line basics**
 
-| Command | Action |
+| Command | What |
 |---|---|
 | `:w` | Write (save) |
-| `:w FILE` | Save as FILE |
+| `:w FILE` | Save as |
 | `:q` | Quit |
-| `:wq` or `ZZ` or `:x` | Save and quit |
-| `:q!` | Quit without saving |
-| `:wa` / `:qa` / `:wqa` | All buffers |
-| `:e FILE` | Open another file |
-| `:set nu` / `:set nonu` | Show / hide line numbers |
-| `:set paste` / `:set nopaste` | Disable / enable auto-indent for pasting |
-| `:s/A/B/` | Substitute first match on current line |
-| `:s/A/B/g` | Substitute all matches on current line |
-| `:%s/A/B/g` | Substitute everywhere |
-| `:%s/A/B/gc` | Substitute everywhere with **c**onfirmation |
-| `:N,Ms/A/B/g` | Substitute in lines N–M |
-| `:N` | Jump to line N |
-| `:!CMD` | Run shell command |
-| `:r FILE` | Read FILE into the buffer |
-| `:r !CMD` | Read the output of CMD into the buffer |
+| `:q!` | Quit, discard changes |
+| `:wq` / `ZZ` | Save + quit |
+| `:x` | Same as `:wq` (no write if unchanged) |
+| `:e FILE` | Edit FILE in current window |
+| `:e!` | Re-read current file from disk (discard) |
+| `:r FILE` | Read FILE into buffer at cursor |
+| `:r !cmd` | Read shell command output |
+| `:!cmd` | Run shell command (output shown briefly) |
+| `:set number` / `:set nonumber` | Toggle line numbers |
+| `:set ignorecase` / `:set noignorecase` | Search case sensitivity |
+| `:set paste` / `:set nopaste` | Paste-friendly mode (no auto-indent) |
+| `:help TOPIC` | Built-in help |
 
-### Visual mode (Vim only — bonus)
+**Visual mode**
 
-| Key | Action |
+| Keys | What |
 |---|---|
-| `v` | Character-wise selection |
-| `V` | Line-wise selection |
-| `Ctrl-v` | **Block** (column) selection |
-| `y` / `d` / `>` / `<` | Yank / delete / indent / dedent the selection |
+| `v` | Char-wise visual select |
+| `V` | Line-wise visual select |
+| `Ctrl-v` | Block (column) visual select |
+| `y` / `d` / `c` / `>` / `<` | Yank / delete / change / indent / outdent the selection |
+
+> **The point of the family tree:** You will use `i a o`, `hjkl`, `dd yy p`, `gg G`, `/pattern`, `:%s///g`, `:w`, `:q` more than the entire rest of vim combined.
 
 ---
 
-## 🛣️ RHCA Pathway Sidebar
+## 🔬 The Anatomy of `vim sshd_config` — In One Diagram
 
-| Cert level | Why this lab matters |
+```
+┌─────────────────────────────────────────────────────────────┐
+│ # /etc/ssh/sshd_config                                       │  ← buffer content
+│ #                                                            │
+│ PermitRootLogin no█                                          │  ← cursor (█) — Normal mode
+│ Port 22                                                      │
+│ ...                                                          │
+│ ~                                                            │  ← `~` means "past end of file"
+│ ~                                                            │
+├─────────────────────────────────────────────────────────────┤
+│ sshd_config            38,18    Top                          │  ← status line (filename, line,col, position)
+│ :wq█                                                         │  ← Ex command line
+└─────────────────────────────────────────────────────────────┘
+       └─ When you type `:` the cursor jumps here.
+```
+
+> **Reading rule:** If your typed letters appear in the buffer, you're in Insert mode (press Esc). If they don't, you're in Normal mode. If they appear at the bottom after `:` or `/`, you're in Ex/search mode.
+
+---
+
+## 📚 vi Reference Table
+
+| Task | Keys |
 |---|---|
-| **Foundation** | The only editor present **everywhere** — rescue shells included |
-| **RHCSA EX200** | Every config-edit task uses `vi` (some allow `nano`, but `vi` is universal) |
-| **RHCE EX294** | Playbook YAML authoring on the control node |
-| **CKA** | `kubectl edit deploy/X` launches `vi` by default — must be fluent |
-| **RHCA — RH342 (Troubleshooting)** | `:set paste` and `:r !CMD` are forensic gold |
-| **RHCA — RH358 (Services)** | Editing service unit overrides — `systemctl edit SERVICE` opens `vi` |
-| **RHCA — RH236 (Storage)** | Brick option files edited node-by-node in `vi` |
+| Open file | `vi FILE` |
+| Open at line N | `vi +N FILE` |
+| Open at first match | `vi +/PAT FILE` |
+| Open read-only | `view FILE` |
+| Save | `:w` |
+| Save + quit | `:wq` or `ZZ` |
+| Quit without save | `:q!` |
+| Quit if no changes | `:q` |
+| Save as | `:w newname` |
+| Reload from disk | `:e!` |
+| Show line numbers | `:set number` |
+| Jump to line N | `:N` or `Ngg` |
+| Find next | `/PAT` then `n` |
+| Find previous | `?PAT` then `n` |
+| Replace all | `:%s/OLD/NEW/g` |
+| Replace with confirm | `:%s/OLD/NEW/gc` |
+| Replace in range | `:N,Ms/OLD/NEW/g` |
+| Delete lines matching | `:g/PAT/d` |
+| Indent / outdent | `>>` / `<<` |
+| Undo / redo | `u` / `Ctrl-r` |
+| Copy/cut line | `yy` / `dd` |
+| Paste | `p` / `P` |
+| Repeat last change | `.` |
+| Split windows | `:split` / `:vsplit` |
+| Switch window | `Ctrl-w w` (or h/j/k/l) |
+| Open another file | `:e otherfile` |
+| List buffers | `:ls` |
+| Switch buffer | `:bN` |
+| Run shell command | `:!cmd` |
+| Insert command output | `:r !cmd` |
+
+> **Rule one of vi:** Press **Esc** any time you don't know what mode you're in. From Normal mode every other command works.
 
 ---
 
-## 🔧 The 20 Tasks
+## 🎯 Career Pathway Sidebar
 
-> Each task ends with three short callouts: **Keys / commands**, **Output decoded**, and **Troubleshoot**.
+| Level | Why this lab matters |
+|---|---|
+| **RHCSA candidate** | The exam VM has `vi`/`vim` and not always `nano`. Editing fluently in `vi` saves you 10–15 minutes across the exam. |
+| **RHCE candidate** | Editing playbooks/inventory in `vi` is standard. Re-indenting blocks (`>>`) and searching with `/` are constant. |
+| **SRE / Platform** | SSH into a host with no IDE: `vi /etc/whatever`. Often the only editor installed on minimal images. |
+| **DevOps** | `git commit` opens `$EDITOR` — usually `vi`. Splitting Dockerfiles into stages with `O` and visual mode is fast. |
+| **AI / MLOps** | GPU servers and training nodes are minimal Linux installs — `vim` plus a `.vimrc` is your IDE. |
 
 ---
 
-### Task 1 — Open a file and recognize the modes
+## 🔧 The 6 Tasks
 
-**Purpose:** Open a test file. Confirm you start in Command mode.
+> Six exam-realistic phases that build **open → insert → motion → search-replace → visual → capstone** muscle memory.
+
+---
+
+### Task 1 — Open, insert, save, quit
 
 ```bash
-mkdir -p ~/vi-lab && cd ~/vi-lab
-cat > demo.txt <<'EOF'
-host = web01
-port = 80
-ssl  = off
-log  = /var/log/app.log
-EOF
-vi demo.txt
+mkdir -p ~/vilab && cd ~/vilab
+vi hello.txt
+# Inside vi:
+#   i             enter Insert mode
+#   Hello, $USER  type some text
+#   <Enter>
+#   This was written in vi.
+#   Esc           back to Normal
+#   :wq           save and quit
+
+cat hello.txt
 ```
-
-Inside `vi`:
-
-```
-(do NOT press any letter yet)
-:        (you should see a `:` appear at the bottom — last-line mode)
-Esc      (back to Command)
-i        (notice "-- INSERT --" at the bottom)
-Esc      (back to Command)
-:q       (quit without saving — you didn't change anything)
-```
-
-**Keys / commands**
-
-| Key | Action |
-|---|---|
-| `vi FILE` | Open file (starts in Command mode) |
-| `:` | Enter last-line mode |
-| `i` | Enter Insert mode |
-| `Esc` | Back to Command |
-| `:q` | Quit (when no unsaved changes) |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Top-left line content | Cursor is on the first line |
-| Bottom-left `:` | Last-line mode is active |
-| Bottom-left `-- INSERT --` | Insert mode is active |
-| No status text | Command mode (the default) |
-
-**Why a sysadmin needs this:** Mode awareness is everything. If your keystrokes "don't work," you're in the wrong mode.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Letters appearing on first key press | The mini `vi` on RHEL minimal images sometimes starts in Insert — press `Esc` first |
-| `Esc` doesn't seem to do anything | On some terminals it lags — try `Ctrl-[` (same as Esc) |
 
 ---
 
-### Task 2 — Insert text with `i`, `a`, `o`
-
-**Purpose:** Practice the three primary entries to Insert mode.
+### Task 2 — Motions + basic edits
 
 ```bash
-vi ~/vi-lab/demo.txt
+cp /etc/services ~/vilab/services.txt
+vi ~/vilab/services.txt
+# Inside vi:
+#   :set number   show line numbers
+#   gg            go to top
+#   G             go to bottom
+#   50gg          jump to line 50
+#   /ssh          search "ssh"; press n/N to step
+#   *             search the word under cursor
+#   dd            delete current line
+#   u             undo
+#   yy p          duplicate the current line
+#   .             repeat the last change
+#   :q!           quit without saving
 ```
-
-Inside `vi`:
-
-```
-i                           (enter Insert)
-[type "BEGIN " then Esc]    (text added before the first 'h' on line 1)
-A                           (append at END of current line)
-[type " # primary" then Esc]
-o                           (open new line BELOW)
-[type "tls = on" then Esc]
-:wq
-```
-
-`cat ~/vi-lab/demo.txt` afterward:
-
-```
-BEGIN host = web01 # primary
-tls = on
-port = 80
-ssl  = off
-log  = /var/log/app.log
-```
-
-**Keys**
-
-| Key | Action |
-|---|---|
-| `i` | Insert before cursor |
-| `A` | Append at end of line |
-| `o` | Open new line below |
-| `Esc` | Return to Command |
-| `:wq` | Save and quit |
-
-**Output decoded**
-
-| Line | What happened |
-|---|---|
-| `BEGIN host = web01 # primary` | `i` prepended, `A` appended |
-| `tls = on` | `o` opened a new line below the first |
-
-**Why a sysadmin needs this:** Faster than navigating to a column with arrows.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Typed `a` mid-word and the char landed wrong | `a` appends AFTER the cursor — use `i` for BEFORE |
-| Forgot `Esc` and typed `:wq` literally | Press `u` (undo), then `Esc` properly |
 
 ---
 
-### Task 3 — Navigate without arrow keys: `h j k l`
-
-**Purpose:** `hjkl` move the cursor without leaving the home row.
+### Task 3 — Search + replace (single file)
 
 ```bash
-vi ~/vi-lab/demo.txt
+cp /etc/ssh/sshd_config ~/vilab/sshd_config
+vi ~/vilab/sshd_config
+# Inside vi:
+#   /PermitRootLogin     find it
+#   ciw                  change inner word (the value) → enter insert mode for the value
+#   no                   type the new value
+#   Esc
+#   :%s/^#Port 22/Port 22/g    uncomment Port 22 globally
+#   :%s/^Banner /#Banner /gc   comment Banner with confirm
+#   :w                   save
+#   :q                   quit
 ```
-
-Inside:
-
-```
-gg          (go to top)
-j j j       (down 3 lines)
-$           (end of line)
-0           (start of line)
-^           (first non-blank)
-w w         (forward two words)
-b           (back one word)
-G           (last line)
-:1          (jump to line 1)
-:q
-```
-
-**Keys**
-
-| Key | Action |
-|---|---|
-| `h` | Left |
-| `j` | Down (mnemonic: jelly falls) |
-| `k` | Up |
-| `l` | Right |
-| `0` / `^` / `$` | Line start / first non-blank / end |
-| `w` / `b` | Word forward / back |
-| `gg` / `G` / `:N` | Top / bottom / jump to line N |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Cursor moves precisely | Hand stays on home row |
-| Status bar | Shows current line/column (in vim, with `:set ruler`) |
-
-**Why a sysadmin needs this on RHCSA EX200:** Some exam terminals lack functioning arrow keys (especially over slow SSH). `hjkl` always works.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Letters typed instead of moving | You were in Insert — `Esc` first |
-| Cursor stays put | Confirm you're in Command mode |
 
 ---
 
-### Task 4 — Delete characters and lines
-
-**Purpose:** Three deletes you'll use constantly: `x`, `dd`, `dw`.
+### Task 4 — Visual mode (line + block)
 
 ```bash
-vi ~/vi-lab/demo.txt
+vi ~/vilab/sshd_config
+# Inside vi:
+#   gg                   top
+#   V                    line visual
+#   10j                  extend selection 10 lines down
+#   >                    indent the block
+#   u                    undo
+#   Ctrl-v               block (column) visual
+#   3l5j                 select a small rectangle
+#   r#                   replace each char in the block with '#'
+#   u                    undo
+#   y                    yank the rectangle
+#   p                    paste it
+#   :wq
 ```
-
-Inside:
-
-```
-gg                  (top)
-x x x               (delete first 3 chars — "BEG" goes)
-dd                  (delete current line)
-dw                  (delete next word)
-2dd                 (delete next 2 lines)
-u                   (undo)
-u                   (undo again — multi-level undo in vim)
-:q!                 (quit without saving — your file is safe)
-```
-
-**Keys**
-
-| Key | Action |
-|---|---|
-| `x` | Delete char under cursor |
-| `dd` | Delete the line |
-| `Ndd` | Delete N lines |
-| `dw` | Delete word |
-| `D` or `d$` | Delete to end of line |
-| `u` | Undo |
-| `:q!` | Quit without saving |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| File buffer after edits | Test changes that you can undo |
-| `:q!` | Discard ALL changes |
-
-**Why a sysadmin needs this:** Quick line cleanup. Combined with `.` (repeat) you can rip through cleanup tasks.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Stuck after `:q` with `No write since last change` | Either `:wq` (save) or `:q!` (discard) |
 
 ---
 
-### Task 5 — Copy and paste with `yy` and `p`
-
-**Purpose:** Yank a line, paste it elsewhere. This is the `vi` equivalent of `Ctrl-C` / `Ctrl-V`.
+### Task 5 — Splits, buffers, ex globals
 
 ```bash
-vi ~/vi-lab/demo.txt
+vi ~/vilab/sshd_config
+# Inside vi:
+#   :vsplit ~/vilab/services.txt   vertical split with another file
+#   Ctrl-w l                       move to right window
+#   Ctrl-w h                       move back to left window
+#   :ls                            list buffers
+#   :b 2                           jump to buffer 2
+#   :g/^#/d                        delete every comment line (current buffer)
+#   :v/^$/d                        delete every NON-blank line — (don't run on this file!)
+#   :e!                            discard changes, re-read from disk
+#   :qa!                           quit all without saving
 ```
-
-Inside:
-
-```
-gg              (top)
-yy              (yank current line)
-G               (go to last line)
-p               (paste — appears BELOW)
-3yy             (yank next 3 lines)
-gg              (top)
-P               (paste BEFORE — 3 lines inserted above line 1)
-:wq
-```
-
-**Keys**
-
-| Key | Action |
-|---|---|
-| `yy` | Yank (copy) the line |
-| `Nyy` | Yank N lines |
-| `yw` | Yank word |
-| `p` | Paste after |
-| `P` | Paste before |
-| `"ayy` / `"ap` | Use register `a` to keep multiple clipboards |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Line duplicated at end | Paste below |
-| 3 lines duplicated at top | Multi-line yank + paste before |
-
-**Why a sysadmin needs this on RHCSA EX200:** Duplicating a configuration block, then editing only the few lines that differ.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Paste lands inside a line | Yanked with `yw` (word) → pastes at cursor; for line-paste use `yy` |
-| Mouse paste mangled formatting | Use `:set paste` first (Task 11) |
 
 ---
 
-### Task 6 — Save and quit, with grace
+### Task 6 — Capstone: harden `sshd_config` in vi only
 
-**Purpose:** Five command combinations cover 100% of save/quit needs.
-
-```bash
-vi ~/vi-lab/demo.txt
-```
-
-Try each variant (open, modify a char with `x`, then test the variant):
-
-| Command | Effect |
-|---|---|
-| `:w` | Save, keep editing |
-| `:w newname.txt` | Save as a new file |
-| `:wq` | Save and quit |
-| `:x` | Save and quit (only writes if changes) |
-| `ZZ` | Same as `:x` — no colon needed |
-| `:q` | Quit (errors out if unsaved changes) |
-| `:q!` | Quit and **discard** changes |
-| `:wqa` | Save and quit ALL buffers |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Bottom-line "demo.txt 4L, 64C written" | Successful save |
-| "No write since last change" | You tried `:q` with unsaved edits |
-
-**Why a sysadmin needs this:** `:x` and `ZZ` are the muscle-memory choices. `:q!` saves you in an emergency.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `E45: 'readonly' option is set` | Use `:w!` (force write) — but check why the file was opened readonly (was the path actually `sudoedit`-required?) |
-| `:wq` gives `Permission denied` | Need `sudo`. Exit with `:q!`, reopen with `sudo vi`, or write through `tee`: `:w !sudo tee %` |
-
----
-
-### Task 7 — Search forward and backward
-
-**Purpose:** `/` is forward, `?` is backward — exactly like `less` (Lab 20).
+**Task statement:** Working on a copy at `/root/vilab/sshd_config`, use only `vi` commands to:
+1. Toggle line numbers on.
+2. Replace any existing `PermitRootLogin` setting with `PermitRootLogin no`.
+3. Append a footer comment `# hardened on <date>` at the last line.
+4. Re-open and use a single ex command to comment every line containing `Banner`.
+5. Save and quit cleanly. Use `diff` against the original to prove the change.
 
 ```bash
-sudo vi /etc/ssh/sshd_config
+sudo -i
+mkdir -p /root/vilab
+cp -a /etc/ssh/sshd_config /root/vilab/sshd_config
+cp -a /etc/ssh/sshd_config /root/vilab/sshd_config.orig
+
+vi /root/vilab/sshd_config
+# Inside vi:
+#   :set number
+#   /PermitRootLogin               find directive
+#   V                              visual line
+#   c                              change the entire line
+#   PermitRootLogin no             type the replacement
+#   Esc
+#   G                              go to last line
+#   o                              open new line below
+#   # hardened on <Ctrl-r =strftime("%F")<Enter>>     (or just type a date string)
+#   Esc
+#   :wq
+
+# Re-open and comment Banner via single ex global
+vi /root/vilab/sshd_config
+# Inside vi:
+#   :g/^Banner /s//#&/
+#   :wq
+
+# Prove the diff
+diff -u /root/vilab/sshd_config.orig /root/vilab/sshd_config | head -n 40
 ```
 
-Inside:
-
-```
-/PermitRoot         (Enter — jumps to first match)
-n                   (next match)
-N                   (previous match)
-?Port               (search backward)
-n
-:noh                (clear highlight)
-:q
-```
-
-**Keys**
-
-| Key | Action |
-|---|---|
-| `/PATTERN` | Forward search (regex) |
-| `?PATTERN` | Backward search |
-| `n` / `N` | Next / previous match |
-| `*` / `#` | Word-under-cursor forward / backward |
-| `:noh` | Clear highlight |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Cursor jumps | To first match |
-| Subsequent matches highlighted | Multiple hits |
-| `:noh` | Stops the highlight (next `/` reactivates it) |
-
-**Why a sysadmin needs this on RHCSA EX200:** Find the setting you need to change without scrolling.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Search case-sensitive when you wanted insensitive | `:set ic` (ignorecase) |
-| Highlight stays | `:noh` or `:set nohlsearch` |
-
----
-
-### Task 8 — Replace text on the current line: `:s/A/B/`
-
-**Purpose:** Substitute exactly like `sed` — but interactively, scoped to where you are.
-
-```bash
-vi ~/vi-lab/demo.txt
-```
-
-Inside:
-
-```
-gg
-/port
-:s/80/8080/
-n
-:s/web01/web02/
-:wq
-```
-
-**Commands**
-
-| Command | Action |
-|---|---|
-| `:s/A/B/` | First match on current line |
-| `:s/A/B/g` | All matches on current line |
-| `:s/A/B/gi` | Case-insensitive |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| First `:s` | `80` → `8080` on the line under cursor |
-| Second `:s` | `web01` → `web02` |
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `E486: Pattern not found` | The pattern isn't on the current line — navigate first or use `:%s` (Task 9) |
-
----
-
-### Task 9 — Whole-file replace: `:%s/A/B/g` with confirmation
-
-**Purpose:** Global substitution. Adding `c` asks you per match — invaluable for tricky edits.
-
-```bash
-vi ~/vi-lab/demo.txt
-```
-
-Inside:
-
-```
-:%s/web01/web42/gc
-y         (yes to first match)
-n         (no to next)
-a         (yes to all remaining)
-:wq
-```
-
-**Commands**
-
-| Command | Action |
-|---|---|
-| `:%s/A/B/g` | Substitute ALL `A` with `B` in the whole file |
-| `:%s/A/B/gc` | Same but **c**onfirm each |
-| `:N,Ms/A/B/g` | Substitute only in lines N–M |
-| `y` / `n` / `a` / `q` / `l` | At each confirmation: yes / no / all / quit / last |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Match highlighted | Awaiting your `y`/`n`/`a` |
-| Bottom-line summary | "N substitutions on M lines" |
-
-**Why a sysadmin needs this on RHCSA EX200:** Standard rename operation — far safer with `c` confirmation.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Forgot `g` | Only first match per line replaced |
-| Slash in pattern/replacement | Use different delim: `:%s#/old/path#/new/path#g` |
-
----
-
-### Task 10 — Undo, redo, and the repeat `.` command
-
-**Purpose:** `u` undoes; `Ctrl-r` redoes; `.` repeats the last change. The dot is `vi`'s secret weapon.
-
-```bash
-vi ~/vi-lab/demo.txt
-```
-
-Inside:
-
-```
-gg
-dd          (delete first line)
-.           (repeat — delete the new first line)
-.           (repeat again)
-u           (undo)
-u
-u
-Ctrl-r      (redo)
-:wq
-```
-
-**Keys**
-
-| Key | Action |
-|---|---|
-| `u` | Undo (vim supports many levels) |
-| `Ctrl-r` | Redo |
-| `U` | Undo all changes on current line (POSIX vi) |
-| `.` | Repeat the **last edit** |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Three lines deleted via two dots | `.` repeats whichever edit you did last |
-| Restored via `u`s | Full history available |
-| Final state | After `Ctrl-r` |
-
-**Why a sysadmin needs this:** Repeated patterns (delete every 3rd line, etc.) become two keystrokes — `dd` then `.`.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `.` doesn't repeat what you expected | `.` only repeats "edits" (text changes), not motions |
-
----
-
-### Task 11 — Paste from outside without auto-indent madness: `:set paste`
-
-**Purpose:** Pasting code with `Ctrl-Shift-V` into a `vi` session with `autoindent` produces staircase indentation. `:set paste` turns indent off temporarily.
-
-```bash
-vi ~/vi-lab/demo.txt
-```
-
-Inside:
-
-```
-:set paste
-i
-[paste a multi-line block from your terminal clipboard]
-Esc
-:set nopaste
-:wq
-```
-
-**Commands**
-
-| Command | Action |
-|---|---|
-| `:set paste` | Disable auto-indent, smart-indent, abbreviations |
-| `:set nopaste` | Restore them |
-| `:set pastetoggle=<F2>` | Bind a toggle key (vim) |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Pasted content keeps original indentation | No more staircase |
-
-**Why a sysadmin needs this on RHCE EX294:** Pasting YAML into a playbook — indentation matters; `paste` mode saves the day.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Paste still wrong | Some terminals translate tabs; consider `xclip`/`xsel` or terminal "bracketed paste" |
-| Forgot to `:set nopaste` after | Subsequent typing also won't autoindent — flip it back |
-
----
-
-### Task 12 — Visit another file, run a shell command, read in output
-
-**Purpose:** Three `ex` commands that turn `vi` into a small environment: `:e`, `:!`, `:r !`.
-
-```bash
-vi ~/vi-lab/demo.txt
-```
-
-Inside:
-
-```
-:e ~/vi-lab/notes.txt     (creates if missing; switches buffer)
-i Hello notes Esc
-:wq
-vi ~/vi-lab/demo.txt
-:!date                      (run shell `date`, paged output)
-:r !date                    (insert `date` output into buffer)
-:r ~/vi-lab/notes.txt       (read the file into the buffer)
-:wq
-```
-
-**Commands**
-
-| Command | Action |
-|---|---|
-| `:e FILE` | Edit another file |
-| `:bn` / `:bp` | Next / previous buffer |
-| `:!CMD` | Run shell command — show output, then return |
-| `:r !CMD` | Insert output of CMD into buffer at cursor |
-| `:r FILE` | Insert FILE's contents at cursor |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| `:!date` | Output briefly displayed; press Enter to return |
-| `:r !date` | A new line with today's date inserted |
-| `:r FILE` | File appended at cursor location |
-
-**Why a sysadmin needs this on RHCA RH342:** Stamp logs with `:r !date` while editing a runbook.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `:!CMD` returns to garbled screen | Press `Ctrl-l` to redraw |
-| Shell command refuses TTY | Some interactive commands (e.g., `less`) need a terminal — won't work via `:!` |
-
----
-
-### Task 13 — Jump to a specific line: `:N` and `NG`
-
-**Purpose:** Pair with `grep -n` (Lab 22) to jump directly to a problem line.
-
-```bash
-grep -n PermitRootLogin /etc/ssh/sshd_config
-sudo vi /etc/ssh/sshd_config
-```
-
-Inside `vi`:
-
-```
-:40        (jump to line 40)
-40G        (alternative — Command mode)
-:set nu    (show line numbers)
-gg
-:set nonu
-:q
-```
-
-**Commands**
-
-| Token | Meaning |
-|---|---|
-| `:N` | Jump to line N |
-| `NG` | Same, in Command mode |
-| `gg` | Line 1 |
-| `G` | Last line |
-| `:set nu` | Show line numbers |
-| `:set nonu` | Hide line numbers |
-| `:set rnu` | Relative line numbers (vim) |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Cursor lands on line 40 | Precision jump |
-| Line numbers shown | Left margin |
-
-**Why a sysadmin needs this on RHCSA EX200:** Combined with `grep -n`, this is the fastest config-edit pattern: `grep -n KEY FILE; vi +N FILE`.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `vi +N FILE` opens at top | Older `vi` may need `vi -c ":N" FILE` |
-
----
-
-### Task 14 — Open at a pattern: `vi +/PATTERN file`
-
-**Purpose:** Skip the open-then-search step.
-
-```bash
-sudo vi +/PermitRootLogin /etc/ssh/sshd_config
-```
-
-Cursor lands on the first match.
-
-**Switches**
-
-| Token | Meaning |
-|---|---|
-| `+N` | Open at line N |
-| `+/PATTERN` | Open at first match of PATTERN |
-| `+CMD` | Run any ex command on open — e.g., `+'set nu'` |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Cursor on first match | Saves keystrokes |
-
-**Why a sysadmin needs this:** Scripts that drop you into a known editing location: `vi +/server_name nginx.conf`.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Pattern not present | Opens at top — that's expected |
-
----
-
-### Task 15 — Indent/dedent blocks with `>>`, `<<`, and visual mode
-
-**Purpose:** Reformat code/YAML quickly. Critical for RHCE EX294.
-
-```bash
-cat > ~/vi-lab/play.yml <<'EOF'
-- hosts: all
-  tasks:
-  - name: install
-    package:
-      name: nginx
-EOF
-vi ~/vi-lab/play.yml
-```
-
-Inside:
-
-```
-gg
-V              (line-visual select; cursor on line 1)
-3j             (extend selection 3 lines down — total 4 lines selected)
->              (indent the selection one shiftwidth)
-gg
-V3j
-<              (dedent)
-:wq
-```
-
-**Keys**
-
-| Key | Action |
-|---|---|
-| `>>` | Indent current line |
-| `<<` | Dedent current line |
-| `N>>` | Indent N lines |
-| `V` (vim) | Line-wise visual mode |
-| `>` / `<` after visual | Indent / dedent selection |
-| `=` after visual | Auto-indent selection (needs filetype detection) |
-| `:set shiftwidth=2` / `:set tabstop=2` / `:set expandtab` | Two-space soft tabs |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Lines shift right/left by `shiftwidth` | YAML structure restored |
-
-**Why a sysadmin needs this on RHCE EX294:** YAML and Ansible roles live or die by correct indentation.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Tabs sneak in | `:set expandtab` ensures spaces |
-| Wrong width | Adjust `:set shiftwidth=N` |
-
----
-
-### Task 16 — Recover from a crashed session: swap files
-
-**Purpose:** `vim` creates a `.swp` file. If your session crashes (SSH drop), reopening offers recovery.
-
-```bash
-vi ~/vi-lab/demo.txt
-i hello-recovery Esc
-# Simulate crash: kill the shell from another terminal:
-#   pkill -9 -f 'vi.*demo.txt'
-# Reopen:
-vi ~/vi-lab/demo.txt
-```
-
-You'll see a prompt offering: `(O)pen Read-Only, (E)dit anyway, (R)ecover, (D)elete it, (Q)uit, (A)bort`.
-
-**Keys / commands**
-
-| Choice | Action |
-|---|---|
-| `R` | Recover the lost edits from the swap file |
-| `D` | Delete the swap (only if you're sure the original is preserved) |
-| `O` | Open read-only to inspect |
-| `Q` | Quit |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Swap-file warning | Another vi had this file open or crashed |
-
-**Why a sysadmin needs this on RHCA RH342:** SSH sessions die. Recovery prevents lost work.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| Bogus swap warning | Confirm no other process: `ls -la ~/.demo.txt.swp` then `rm` it if safe |
-| Want swap elsewhere | `:set directory=~/.vim/swap` |
-
----
-
-### Task 17 — Edit a file you opened without `sudo`
-
-**Purpose:** You opened `/etc/ssh/sshd_config` as a regular user and made edits. `:w` fails. Save without losing changes.
-
-```bash
-vi /etc/ssh/sshd_config
-# Make a small edit, then:
-:w !sudo tee % > /dev/null
-:q!
-```
-
-**Commands**
-
-| Token | Meaning |
-|---|---|
-| `:w !CMD` | Pipe the buffer to CMD (your edits are stdin) |
-| `tee %` | `%` is the current filename; `tee` writes through sudo |
-| `> /dev/null` | Suppress the echoed contents |
-| `:q!` | Quit (buffer is now stale relative to disk) |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| sudo prompt | Authenticate |
-| `:q!` | Discard the now-out-of-date buffer; the file on disk has your edits |
-
-**Why a sysadmin needs this on RHCSA EX200:** Saves you the "exit, sudo vi, redo edits" cycle. Use sparingly — `sudoedit` is the recommended workflow.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| sudo asks for password but you can't type | Some terminals consume Esc — press `Ctrl-c` then redo `:w !sudo …` |
-| sudoedit alternative | Run `sudoedit /etc/ssh/sshd_config` from the shell — opens in `$EDITOR` and saves atomically |
-
----
-
-### Task 18 — Persist your preferences with `~/.vimrc`
-
-**Purpose:** A small `~/.vimrc` saves time on every session. Keep it minimal and exam-safe.
-
-```bash
-cat > ~/.vimrc <<'EOF'
-set nocompatible        " full vim features
-set number              " line numbers
-set ruler               " cursor position
-set showcmd             " show partial command in bottom right
-set incsearch           " incremental search
-set hlsearch            " highlight all matches
-set ignorecase smartcase
-set tabstop=2 shiftwidth=2 expandtab
-set autoindent
-set wildmenu            " ex-command tab completion
-syntax on
-filetype plugin indent on
-" Quick toggle paste mode
-set pastetoggle=<F2>
-EOF
-vi ~/vi-lab/demo.txt
-```
-
-Open any file — line numbers and syntax highlighting appear immediately.
-
-**Commands**
-
-| Line | Meaning |
-|---|---|
-| `set nocompatible` | Use vim features, not strict POSIX vi |
-| `set number` | Show line numbers |
-| `set ignorecase smartcase` | Search insensitive unless pattern has uppercase |
-| `set tabstop=2 …` | 2-space soft tabs (YAML-friendly) |
-| `syntax on` | Color syntax |
-| `pastetoggle=<F2>` | Press F2 to flip paste mode |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| Numbers in margin | `set number` is active |
-| Color | `syntax on` |
-
-**Why a sysadmin needs this on RHCSA EX200:** Modest, defaults-friendly `~/.vimrc` — set it up before the exam to feel at home.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `vi` (minimal) doesn't honor `.vimrc` | The mini `vi` ignores it. The full `vim` reads it. |
-| Want machine-wide defaults | Edit `/etc/vimrc` (RHEL) |
-
----
-
-### Task 19 — Edit a systemd unit override the right way
-
-**Purpose:** `systemctl edit` opens an override file in `vi`, with the parent unit shown in a comment. This is the canonical RHCA way.
-
-```bash
-sudo systemctl edit sshd
-```
-
-Inside the editor (showing a blank `override.conf`):
-
-```
-i
-[Service]
-LimitNOFILE=4096
-Esc
-:wq
-sudo systemctl daemon-reload
-sudo systemctl restart sshd
-systemctl cat sshd | head -20
-```
-
-**Commands**
-
-| Command | Action |
-|---|---|
-| `sudo systemctl edit UNIT` | Open `/etc/systemd/system/UNIT.d/override.conf` |
-| `sudo systemctl edit --full UNIT` | Edit a full copy of the unit (rare; prefer overrides) |
-| `sudo systemctl cat UNIT` | Show merged unit definition |
-| `daemon-reload` | Reload systemd after a unit change |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| `[Service]` section in override | New directives added |
-| `daemon-reload` | systemd re-reads units |
-| `restart sshd` | Apply the override |
-
-**Why a sysadmin needs this on RHCA RH358:** The exam-standard service tuning workflow.
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `EDITOR` not set | `sudo EDITOR=vim systemctl edit sshd` |
-| Override empty after save | Make sure you typed inside Insert mode |
-
----
-
-### Task 20 — Exam-style scenario: precise edit + verify
-
-**Task statement (RHCSA-style):** *"In `/etc/ssh/sshd_config`, set `PermitRootLogin no`, `PasswordAuthentication no`, and `MaxAuthTries 3`. Preserve a `.bak` backup. Verify syntactically and show the unified diff."*
-
-```bash
-# 1. Backup
-sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
-
-# 2. Open at the first relevant key
-sudo vi +/PermitRootLogin /etc/ssh/sshd_config
-```
-
-Inside `vi`:
-
-```
-:set nu
-/PermitRootLogin
-:s/.*PermitRootLogin.*/PermitRootLogin no/      (replace whole line)
-/PasswordAuthentication
-:s/.*PasswordAuthentication.*/PasswordAuthentication no/
-/MaxAuthTries
-:s/.*MaxAuthTries.*/MaxAuthTries 3/
-:wq
-```
-
-Then in the shell:
-
-```bash
-sudo sshd -t && echo "syntax OK"
-sudo diff -u /etc/ssh/sshd_config.bak /etc/ssh/sshd_config
-```
-
-**Expected output (excerpt):**
-
-```
-syntax OK
---- /etc/ssh/sshd_config.bak
-+++ /etc/ssh/sshd_config
-@@ -38,3 +38,3 @@
+**Expected verification output (excerpt):**
+
+```text
+--- /root/vilab/sshd_config.orig    ...
++++ /root/vilab/sshd_config         ...
+@@ -38,1 +38,1 @@
 -#PermitRootLogin prohibit-password
 +PermitRootLogin no
-…
--#PasswordAuthentication yes
-+PasswordAuthentication no
-…
--#MaxAuthTries 6
-+MaxAuthTries 3
+@@ -86,1 +86,1 @@
+-Banner /etc/issue.net
++#Banner /etc/issue.net
+@@ -120,0 +121,1 @@
++# hardened on 2026-05-26
 ```
 
-**Step-by-step rationale**
+**Cleanup**
 
-| Step | Why |
-|---|---|
-| `cp /etc/X /etc/X.bak` | Reversible — known-good restore point |
-| `vi +/PATTERN` | Land directly on the first edit |
-| `:set nu` | Confirm line numbers (helps reproduce edits) |
-| Repeated `/SEARCH` + `:s/.*KEY.*/KEY VALUE/` | Whole-line replace removes any `#` comment |
-| `:wq` | Save and quit |
-| `sshd -t` | Syntax check before any restart |
-| `diff -u` | Prove exactly what changed (Lab 23 muscle memory) |
-
-**Output decoded**
-
-| Element | Meaning |
-|---|---|
-| `syntax OK` | Safe to `systemctl reload sshd` |
-| Unified diff | Three settings updated; comments stripped |
-
-**Troubleshoot**
-
-| Symptom | Fix |
-|---|---|
-| `Permission denied` | You forgot `sudo vi` — use Task 17's `:w !sudo tee %` trick |
-| `:s` complains "Pattern not found" | The current line doesn't contain the pattern; search first or use `:%s/.*KEY.*/KEY VALUE/` |
-| sshd test fails | Restore from backup: `sudo cp /etc/ssh/sshd_config.bak /etc/ssh/sshd_config` |
+```bash
+rm -rf /root/vilab
+exit
+```
 
 ---
 
 ## 🔍 vi Decision Guide
 
 ```
-"I just want to look — not edit"         → view FILE   (or vi -R FILE)
-"Edit a config file"                     → vi FILE                       (always backup first)
-"Edit a system file"                     → sudoedit FILE   or  sudo vi FILE
-"Edit a systemd unit"                    → systemctl edit UNIT
-"I broke something"                      → :q!     (or u repeatedly)
-"My typing isn't appearing"              → press Esc (you're in Command mode), then i
-"I can't save"                           → :w!  (force);  or  :w !sudo tee %
-"Jump to line N"                         → vi +N FILE   or  inside: :N
-"Find a string"                          → vi +/PATTERN FILE   or  /PATTERN
-"Replace everywhere"                     → :%s/A/B/gc           (always with c at first)
-"Paste safely"                           → :set paste, paste, :set nopaste
-"Recover lost work"                      → choose R when the swap-file dialog appears
+What do you want to do?
+  ├── "Insert text"                              → i / a / o / O   then type   then Esc
+  ├── "Move without arrows"                      → h j k l, w b e, 0 ^ $, gg G
+  ├── "Jump to line N"                           → :N   or   Ngg
+  ├── "Find / find next"                         → /PAT   then   n / N
+  ├── "Replace once / everywhere / w/ confirm"   → :s/old/new/   :%s/old/new/g   :%s/old/new/gc
+  ├── "Delete every comment line"                → :g/^#/d
+  ├── "Save / quit / both / discard"             → :w   :q   :wq   :q!
+  ├── "Open another file beside it"              → :vsplit other  / :split other
+  ├── "Run a shell command"                      → :!cmd   /   :r !cmd  (insert output)
+  ├── "I'm lost — what mode am I in?"            → press Esc; you're now in Normal mode
+  └── "Show line numbers"                        → :set number   (`:set nu` short form)
 ```
 
 ---
 
-## ✅ Lab Checklist (20 Tasks)
+## ✅ Lab Checklist (6 Tasks)
 
-- [ ] 01 Open `vi` and identify the three modes
-- [ ] 02 Enter Insert with `i`, `A`, `o`
-- [ ] 03 Navigate with `hjkl`, `0`, `$`, `^`, `w`, `b`, `gg`, `G`
-- [ ] 04 Delete with `x`, `dd`, `dw`, `D`
-- [ ] 05 Yank and paste with `yy`, `Nyy`, `p`, `P`
-- [ ] 06 Save and quit with `:w`, `:wq`, `:x`, `ZZ`, `:q!`
-- [ ] 07 Search with `/`, `?`, `n`, `N`, `*`, `:noh`
-- [ ] 08 Line-scoped substitute `:s/A/B/`
-- [ ] 09 Whole-file `:%s/A/B/g[c]`
-- [ ] 10 Undo `u`, redo `Ctrl-r`, repeat `.`
-- [ ] 11 `:set paste` for safe paste
-- [ ] 12 `:e`, `:!CMD`, `:r FILE`, `:r !CMD`
-- [ ] 13 Jump to line N (`:N` / `NG`); `:set nu`
-- [ ] 14 Open at pattern: `vi +/PATTERN FILE`
-- [ ] 15 Indent / dedent with `>>`, `<<`, visual + `>`
-- [ ] 16 Recover from a swap file
-- [ ] 17 Save with `:w !sudo tee %` when you opened without sudo
-- [ ] 18 Build a minimal `~/.vimrc`
-- [ ] 19 `systemctl edit UNIT` workflow
-- [ ] 20 Exam combo: backup + edit + syntax check + diff
+- [ ] 01 Create a file, insert, save, quit
+- [ ] 02 Motions (`gg`, `G`, `Ngg`, `/PAT`) and basic edits (`dd`, `yy`, `p`, `u`, `.`)
+- [ ] 03 Search + `:%s/old/new/gc` substitution
+- [ ] 04 Visual mode line and block selection
+- [ ] 05 Splits and ex globals (`:g/PAT/d`)
+- [ ] 06 Capstone — harden `sshd_config` in vi and verify with diff
 
 ---
 
@@ -1219,39 +442,35 @@ syntax OK
 
 | Mistake | Symptom | Fix |
 |---|---|---|
-| Typing in Command mode by accident | Random commands run | Press `Esc`, then `u` to undo |
-| Pressing `Q` (uppercase) | Drops into Ex mode (`E173: …`) | Type `visual` and Enter to escape |
-| `:wq` without sudo on system file | Permission denied | `:w !sudo tee %` or restart with `sudoedit` |
-| Pasting code with auto-indent on | Staircase indentation | `:set paste` before pasting |
-| Caps Lock on | All commands feel "wrong" | Toggle Caps Lock — `G` vs `g` etc. matter |
-| `Ctrl-S` to save (muscle memory) | Terminal freezes (XOFF) | Press `Ctrl-Q` to unfreeze |
-| Mouse over SSH | Stray clicks switch position | `:set mouse=` to disable |
-| Opening huge log | Slow / OOM | Use `less` (Lab 20) instead |
-| Forget to `:set nopaste` | Subsequent edits skip auto-indent | Toggle off |
-| Edited `vi` (minimal) and `.vimrc` is ignored | Settings don't stick | That's expected — full `vim` honors it |
+| Typed `:wq` while in Insert mode | `:wq` appears in the file | Esc first, then `:wq` |
+| Pressed Caps Lock | "Why is every command broken?" | Turn off Caps Lock |
+| Used arrow keys and never learned `hjkl` | Slow long-term | Force yourself for one week |
+| Yanked, came back to shell, paste was wrong | `yy` yanks to vim's `"` register, not the clipboard | `"+yy` (system clipboard) requires vim with `+clipboard` |
+| Lost an unsaved swap file | Crashed mid-edit | `vim FILE` will offer to recover from `.FILE.swp` |
+| `:q` refused to quit | Unsaved changes | `:w` to save or `:q!` to discard |
+| Paste from terminal added auto-indent staircase | Paste mode off | `:set paste`, paste, `:set nopaste` |
+| `:%s/old/new/` only replaced first per line | Forgot `g` flag | `:%s/old/new/g` |
+| `:%s/path/old/new/` broke | `/` inside pattern | Use a different delimiter `:%s|/etc/old|/etc/new|g` |
+| Cannot exit vim (the famous joke) | Permanently in some mode | Esc, then `:q!` — always works |
 
 ---
 
-## 📌 Exam Strategy
+## 🎯 Career & Interview Strategy
 
-**RHCSA EX200**
-- Open every config with `sudo vi +/KEY FILE` to jump directly.
-- After editing a system service config, run `sudo SERVICE -t` to syntax-check before restarting.
-- Use `:%s/.*KEY.*/KEY VALUE/` to replace a setting whether it was commented or not.
+**RHCSA candidate**
+- Run `vimtutor` once end-to-end. Then do every config edit in this curriculum in `vi` (not nano) until it's reflexive.
 
-**RHCE EX294 (Ansible)**
-- `:set tabstop=2 shiftwidth=2 expandtab` makes YAML painless.
-- `:set paste` before pasting playbook fragments.
-- `ansible-playbook --syntax-check site.yml` after edits.
+**RHCE candidate**
+- `gg=G` (re-indent the whole file) is gold for YAML playbooks.
 
-**CKA**
-- `kubectl edit deploy/X` uses `$EDITOR` (default `vi`). Be ready.
-- Set `export EDITOR=vim` at session start.
+**SRE / Platform interview**
+- "How would you correlate two log files quickly?" → `vi -O log1 log2`, `Ctrl-w w` to switch, `/error` in each pane, jump between with `:bn`/`:bp`.
 
-**RHCA**
-- RH342: `:r !journalctl --since '5 min ago' -u UNIT` stamps live logs into runbooks.
-- RH358: `systemctl edit` for safe overrides.
-- RH236: edit brick config per node — `for h in nodes; do ssh "$h" sudo vi /path/conf; done` (or use Ansible).
+**DevOps**
+- Author a tiny `~/.vimrc` (line numbers, syntax on, 2-space indent, `set paste` shortcut). Drop it on every server you SSH to.
+
+**AI / MLOps**
+- Edit YAML/JSON configs on training nodes; learn `=` (indent), `gqip` (reflow paragraph), `gv` (re-select last visual).
 
 ---
 
@@ -1259,16 +478,15 @@ syntax OK
 
 | Lab | Connection |
 |---|---|
-| Lab 19 — `cat` | `cat -n` finds the line number to feed `vi +N` |
-| Lab 20 — `less` | Press `v` inside `less` to drop straight into `vi` |
-| Lab 22 — `grep` | `grep -n` + `vi +N` is the canonical edit-jump pipeline |
-| Lab 23 — `diff` / `vimdiff` | The interactive merge tool built on `vi` |
-| Lab 24 — `sed` | When edits are scriptable, use `sed -i`; when interactive, use `vi` |
-| Lab 27 — `vipw`, `vigr` | Special-purpose `vi` wrappers for `/etc/passwd` and `/etc/group` |
+| Lab 19 — `cat` | Read first, edit only when needed |
+| Lab 22 — `grep` | Same regex flavor |
+| Lab 24 — `sed` | Non-interactive cousin of `:%s///g` |
+| Lab 23 — `diff` | Compare before/after vi edits |
+| Lab 27 — `vipw`/`vigr` | Safer wrappers for `/etc/passwd` and `/etc/group` |
 
 ---
 
 ## 👤 Author
 
-**Kelvin R. Tobias**  
+**Kelvin R. Tobias**
 [kelvinintech.com](https://kelvinintech.com) · [GitHub](https://github.com/kelvintechnical) · [LinkedIn](https://www.linkedin.com/in/kelvin-r-tobias-211949219)
